@@ -1,44 +1,56 @@
-import pydirectinput as pd
+import pygame
+import os
 import time
-import ctypes
+import winsound
 
-# 强制开启 DPI 意识，防止坐标或按键偏移
-try:
-    ctypes.windll.user32.SetProcessDPIAware()
-except:
-    pass
+# ==========================================
+# 配置区
+# ==========================================
+ALARM_FILE = 'warning.mp3'
 
 
-def test_keys():
-    print("=" * 30)
-    print("🎮 游戏按键模拟测试工具")
-    print("=" * 30)
-    print("请在 2 秒内切换到游戏窗口，并确保输入法为 ENG (英文)...")
+def test_audio():
+    print("--- 🔊 告警音效兼容性测试 ---")
 
-    # 倒计时
-    for i in range(2, 0, -1):
-        print(f"倒计时: {i}...")
-        time.sleep(1)
+    # 1. 检查文件是否存在
+    if not os.path.exists(ALARM_FILE):
+        print(f"❌ 错误：在当前目录下没找到 {ALARM_FILE}")
+        print(f"当前路径: {os.getcwd()}")
+        return
 
-    # --- 测试 F10 ---
-    print("\n[1/2] 正在尝试按 F10...")
-    pd.keyDown('f10')
-    time.sleep(0.5)  # 模拟长按 0.5 秒
-    pd.keyUp('f10')
-    print("   -> 指令已发送，请观察游戏内是否施放技能。")
+    print(f"✅ 找到文件: {ALARM_FILE}")
 
-    time.sleep(2)  # 间隔一下
+    # 2. 尝试使用 Pygame 播放 (支持 MP3 最佳)
+    try:
+        print("\n🧪 测试 1：正在尝试使用 Pygame 播放...")
+        pygame.mixer.init()
+        pygame.mixer.music.load(ALARM_FILE)
+        pygame.mixer.music.play()
 
-    # --- 测试 F11 ---
-    print("\n[2/2] 正在尝试按 F11...")
-    pd.keyDown('f11')
-    time.sleep(0.5)  # 模拟长按 0.5 秒
-    pd.keyUp('f11')
-    print("   -> 指令已发送，请观察游戏内是否切换窗口或施放技能。")
+        print("🎶 播放指令已发送，请听是否有声音...")
+        # 等待 5 秒，确保异步播放有时间发出声音
+        start_time = time.time()
+        while time.time() - start_time < 5:
+            if pygame.mixer.music.get_busy():
+                time.sleep(0.1)
+            else:
+                break
+        print("✨ Pygame 测试流程结束。")
 
-    print("\n" + "=" * 30)
-    print("测试结束。如果没反应，请检查游戏是否为管理员运行。")
+    except Exception as e:
+        print(f"❌ Pygame 播放失败: {e}")
+
+    # 3. 兜底测试：系统内置音
+    print("\n🧪 测试 2：正在尝试调用 Windows 系统内置音 (MessageBeep)...")
+    try:
+        # 这个不需要文件，直接调用系统 API
+        winsound.MessageBeep(winsound.MB_ICONHAND)
+        print("🔔 系统音指令已发送。")
+    except Exception as e:
+        print(f"❌ 系统音调用失败: {e}")
+
+    print("\n--- 测试全部完成 ---")
 
 
 if __name__ == "__main__":
-    test_keys()
+    test_audio()
