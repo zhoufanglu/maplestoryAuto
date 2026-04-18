@@ -1,6 +1,7 @@
 import pydirectinput as pd
 import time
 import random
+import auto_buff
 
 # 配置
 pd.PAUSE = 0.01
@@ -11,6 +12,15 @@ RANGE_RUN = 300  # 超过这个距离开启“长跑模式”
 
 
 def auto_action(char_pos, hunters_pos, attack_key='x'):
+    # ==========================================
+    # 强制熔断检查
+    # ==========================================
+    if auto_buff.is_buffing:
+        # 确保在静止期间，攻击线程不会发出任何指令
+        # 甚至可以加一个打印来确认它是否停了
+        # print("DEBUG: 攻击逻辑已熔断")
+        return
+
     if char_pos is None or not hunters_pos:
         # 没怪的时候确保按键释放
         pd.keyUp('left')
