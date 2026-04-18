@@ -11,12 +11,12 @@ import pygetwindow as gw
 GAME_WINDOW_TITLE = "MapleStoryGo"
 
 # 模板图片设置
-SNOWMAN_IMG = 'xiaoxueren.png'
-CHAR_TITLE_IMG = 'char_title.png'  # 👈 更新：使用角色的称号图片
+HUNTER_TARGET_IMG = 'hunters/xiaoxueren.png'  # 虽然文件名没变，但逻辑变量已改为 Hunter
+CHAR_TITLE_IMG = 'char_title.png'
 
 # 阈值设置
-THRESHOLD_SNOWMAN = 0.55  # 雪人识别阈值 (根据你的反馈保持0.40)
-THRESHOLD_TITLE = 0.60  # 👈 称号识别阈值 (称号是固定的，建议先设高，如0.70-0.80)
+THRESHOLD_HUNTER = 0.55   # 猎物识别阈值
+THRESHOLD_TITLE = 0.60    # 称号识别阈值
 
 # 预览窗口设置
 VIEW_SCALE = 0.7
@@ -29,7 +29,7 @@ except:
     pass
 
 
-def start_title_vision():
+def start_hunter_vision():
     print(f"[*] 正在搜寻窗口: [{GAME_WINDOW_TITLE}]...")
 
     try:
@@ -40,15 +40,14 @@ def start_title_vision():
         return
 
     print(f"[*] 窗口已锁定。预览窗口按 'q' 键退出。")
-
     print("[*] 正在加载特征模板...")
 
-    # 加载雪人
-    tpl_snowman = cv2.imread(SNOWMAN_IMG)
-    if tpl_snowman is None:
-        print(f"❌ 错误：根目录下找不到 {SNOWMAN_IMG}")
+    # 加载猎物 (原小雪人)
+    tpl_hunter = cv2.imread(HUNTER_TARGET_IMG)
+    if tpl_hunter is None:
+        print(f"❌ 错误：根目录下找不到 {HUNTER_TARGET_IMG}")
         return
-    h_snw, w_snw = tpl_snowman.shape[:2]
+    h_htr, w_htr = tpl_hunter.shape[:2]
 
     # 加载角色称号
     tpl_title = cv2.imread(CHAR_TITLE_IMG)
@@ -57,7 +56,7 @@ def start_title_vision():
         return
     h_ttl, w_ttl = tpl_title.shape[:2]
 
-    print("[*] 称号视觉引擎就绪！")
+    print("[*] Hunter 视觉引擎就绪！")
 
     while True:
         # 1. 局部截图
@@ -66,49 +65,48 @@ def start_title_vision():
         frame = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
 
         # ==========================================
-        # 【2. 多目标匹配：雪人 -> 红框】(保持不变)
+        # 【2. 多目标匹配：猎物 (Hunter) -> 红框】
         # ==========================================
-        res_snw = cv2.matchTemplate(frame, tpl_snowman, cv2.TM_CCOEFF_NORMED)
-        loc_snw = np.where(res_snw >= THRESHOLD_SNOWMAN)
+        res_htr = cv2.matchTemplate(frame, tpl_hunter, cv2.TM_CCOEFF_NORMED)
+        loc_htr = np.where(res_htr >= THRESHOLD_HUNTER)
 
-        rects_snw = []
-        for pt in zip(*loc_snw[::-1]):
-            rects_snw.append([int(pt[0]), int(pt[1]), int(w_snw), int(h_snw)])
-            rects_snw.append([int(pt[0]), int(pt[1]), int(w_snw), int(h_snw)])
+        rects_htr = []
+        for pt in zip(*loc_htr[::-1]):
+            rects_htr.append([int(pt[0]), int(pt[1]), int(w_htr), int(h_htr)])
+            rects_htr.append([int(pt[0]), int(pt[1]), int(w_htr), int(h_htr)])
 
-        rects_snw, _ = cv2.groupRectangles(rects_snw, groupThreshold=1, eps=0.5)
+        # 过滤重叠框
+        rects_htr, _ = cv2.groupRectangles(rects_htr, groupThreshold=1, eps=0.5)
 
-        snw_count = 0
-        for (x, y, w_box, h_box) in rects_snw:
+        hunter_count = 0
+        for (x, y, w_box, h_box) in rects_htr:
+            # 绘制红框
             cv2.rectangle(frame, (x, y), (x + w_box, y + h_box), (0, 0, 255), 2)
-            cv2.putText(frame, f"S:{snw_count}", (x, y - 5),
+            # 标记改为 H (代表 Hunter)
+            cv2.putText(frame, f"H:{hunter_count}", (x, y - 5),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 0, 255), 1)
-            snw_count += 1
+            hunter_count += 1
 
         # ==========================================
-        # 【3. 匹配：角色称号 -> 蓝框】(重点修改)
+        # 【3. 匹配：角色称号 -> 蓝框】
         # ==========================================
         res_ttl = cv2.matchTemplate(frame, tpl_title, cv2.TM_CCOEFF_NORMED)
-
-        # 使用单点匹配模式即可，因为只有一个主角色
         _, max_val_ttl, _, max_loc_ttl = cv2.minMaxLoc(res_ttl)
 
         char_count = 0
         if max_val_ttl >= THRESHOLD_TITLE:
-            x, y = max_loc_ttl
-            # 绘制称号蓝框 (线条稍微粗一点以示区别)
-            cv2.rectangle(frame, max_loc_ttl, (x + w_ttl, y + h_ttl), (255, 0, 0), 3)
-            # 在蓝框下方写上“CHAR”
-            cv2.putText(frame, "CHAR TITLE", (x, y + h_ttl + 15),
+            tx, ty = max_loc_ttl
+            cv2.rectangle(frame, (tx, ty), (tx + w_ttl, ty + h_ttl), (255, 0, 0), 3)
+            cv2.putText(frame, "CHARACTER", (tx, ty + h_ttl + 15),
                         cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
             char_count = 1
 
         # 打印状态
-        print(f"🔍 监控中... 雪人: {snw_count}  角色称号: {char_count} (Max:{max_val_ttl:.2f})   ", end='\r')
+        print(f"🔍 狩猎监控中... 猎物(Hunter): {hunter_count}  角色: {char_count} (Max:{max_val_ttl:.2f})   ", end='\r')
 
         # 4. 显示预览
         show_frame = cv2.resize(frame, (0, 0), fx=VIEW_SCALE, fy=VIEW_SCALE)
-        cv2.imshow('Title-Monitor', show_frame)
+        cv2.imshow('Hunter-Monitor-System', show_frame)
 
         # 按 Q 退出
         if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -118,4 +116,4 @@ def start_title_vision():
 
 
 if __name__ == "__main__":
-    start_title_vision()
+    start_hunter_vision()
