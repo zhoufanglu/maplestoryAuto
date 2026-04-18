@@ -12,79 +12,66 @@ RANGE_RUN = 300  # 超过这个距离开启“长跑模式”
 
 
 def auto_action(char_pos, hunters_pos, attack_key='x'):
-    # ==========================================
-    # 强制熔断检查
-    # ==========================================
-    if auto_buff.is_buffing:
-        # 确保在静止期间，攻击线程不会发出任何指令
-        # 甚至可以加一个打印来确认它是否停了
-        # print("DEBUG: 攻击逻辑已熔断")
-        return
+    try:
+        # 1. 熔断检查
+        if auto_buff.is_buffing:
+            return
 
-    if char_pos is None or not hunters_pos:
-        # 没怪的时候确保按键释放
-        pd.keyUp('left')
-        pd.keyUp('right')
-        return
+        # 2. 安全检查
+        if char_pos is None or not hunters_pos or len(hunters_pos) == 0:
+            pd.keyUp('left')
+            pd.keyUp('right')
+            return
 
-    char_x, char_y = char_pos
+        char_x, char_y = char_pos
 
-    # 1. 寻找最近目标
-    closest_hunter = None
-    min_dist_x = 999999
-    for h_x, h_y in hunters_pos:
-        dist_x = abs(h_x - char_x)
-        if dist_x < min_dist_x:
-            min_dist_x = dist_x
-            closest_hunter = (h_x, h_y)
+        # 3. 寻找最近目标 (增加健壮性处理)
+        closest_hunter = None
+        min_dist_x = 999999
 
-    if closest_hunter:
-        target_x, _ = closest_hunter
-        direction = 'left' if target_x < char_x else 'right'
-        other_dir = 'right' if direction == 'left' else 'left'
+        for h in hunters_pos:
+            # 确保拿到的是坐标点
+            if isinstance(h, (list, tuple)) and len(h) >= 2:
+                h_x, h_y = h[0], h[1]
+                dist_x = abs(h_x - char_x)
+                if dist_x < min_dist_x:
+                    min_dist_x = dist_x
+                    closest_hunter = (h_x, h_y)
 
-        # 确保不会同时按住反方向
-        pd.keyUp(other_dir)
+        if closest_hunter:
+            target_x, _ = closest_hunter
+            direction = 'left' if target_x < char_x else 'right'
+            other_dir = 'right' if direction == 'left' else 'left'
 
-        # --- 优化后的丝滑移动逻辑 ---
+            pd.keyUp(other_dir)
 
-        # 情况 A：怪很远 -> 开启长跑模式
-        if min_dist_x > RANGE_RUN:
-            pd.keyDown(direction)
-            # 增加单次按住的时间，减少“走走停停”
-            time.sleep(random.uniform(0.5, 0.8))
-            # 注意：这里不急着 keyUp，让下一轮循环决定是否继续跑
-            print(f"[*] 远距离奔跑: {direction} ", end='\r')
+            # 情况 A：远距离奔跑
+            if min_dist_x > RANGE_RUN:
+                pd.keyDown(direction)
+                time.sleep(0.3)  # 缩短单次步长，增加响应频率
+                # 不松开，交给下一轮循环
 
-        # 情况 B：中等距离 -> 小碎步接近
-        elif RANGE_ATTACK < min_dist_x <= RANGE_RUN:
-            pd.keyDown(direction)
-            time.sleep(random.uniform(0.1, 0.2))
-            pd.keyUp(direction)
-            print(f"[*] 小碎步接近: {direction} ", end='\r')
+            # 情况 B：中等距离
+            elif RANGE_ATTACK < min_dist_x <= RANGE_RUN:
+                pd.keyDown(direction)
+                time.sleep(0.1)
+                pd.keyUp(direction)
 
-        # 情况 C：到达攻击距离 -> 瞬间转向 + 攻击
+            # 情况 C：攻击
+            else:
+                pd.keyUp(direction)
+                # 转身逻辑
+                pd.press(direction)  # 使用 press 代替 down/up 组合更稳定
+                time.sleep(0.05)
+
+                # 攻击
+                pd.press(attack_key)
+                print(f"[*] 斩击目标: {target_x} ", end='\r')
+                time.sleep(0.1)
+
         else:
-            # 如果之前在跑，先松开方向键站稳
-            pd.keyUp(direction)
-            time.sleep(0.05)
+            pd.keyUp('left')
+            pd.keyUp('right')
 
-            # 转身（极短）
-            pd.keyDown(direction)
-            time.sleep(0.02)
-            pd.keyUp(direction)
-
-            # 攻击
-            time.sleep(0.05)
-            pd.keyDown(attack_key)
-            time.sleep(random.uniform(0.1, 0.15))
-            pd.keyUp(attack_key)
-
-            # 攻击后随机发呆时间缩短，提升连贯性
-            time.sleep(random.uniform(0.1, 0.2))
-            print(f"[*] 斩击完成！          ", end='\r')
-
-    else:
-        # 没目标时释放按键
-        pd.keyUp('left')
-        pd.keyUp('right')
+    except Exception as e:
+        print(f"❌ attack.py 发生错误: {e}")
