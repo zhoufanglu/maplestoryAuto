@@ -19,7 +19,7 @@ HUNTER_FILES = ['hunters/img.png', 'hunters/img_1.png']
 TITLE_IMG = 'char_title.png'
 
 # 识别配置
-THRESHOLD_HUNTER = 0.22  # 边缘模式门槛
+THRESHOLD_HUNTER = 0.15 # 边缘模式门槛  越大匹配度越高
 THRESHOLD_TITLE = 0.60  # 角色识别门槛
 Y_DIFF_LIMIT = 200  # Y轴高度差限制
 VIEW_SCALE = 0.5  # 预览缩放
