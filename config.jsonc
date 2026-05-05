@@ -1,0 +1,9 @@
+{
+  // 功能总开关
+  "features": {
+    "enable_attack": false,
+    "enable_auto_buff": false,
+    "enable_warning": false
+  }
+}
+

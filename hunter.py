@@ -10,19 +10,26 @@ import threading
 import attack
 import auto_buff
 import warning
+from app_config import load_config
 
 # ==========================================
 # 核心设置区
 # ==========================================
-GAME_WINDOW_TITLE = "MapleStoryGo"
-HUNTER_FILES = ['hunters/img.png', 'hunters/img_1.png']
+GAME_WINDOW_TITLE = "WingsMS-v0.31"
+HUNTER_FILES = ['hunters/img_1.png', 'hunters/img_2.png']
 TITLE_IMG = 'char_title.png'
 
 # 识别配置
-THRESHOLD_HUNTER = 0.15 # 边缘模式门槛  越大匹配度越高
+THRESHOLD_HUNTER = 0.25 # 边缘模式门槛  越大匹配度越高
 THRESHOLD_TITLE = 0.60  # 角色识别门槛
 Y_DIFF_LIMIT = 200  # Y轴高度差限制
 VIEW_SCALE = 0.5  # 预览缩放
+
+APP_CONFIG = load_config()
+FEATURES_CONFIG = APP_CONFIG.get("features", {})
+ENABLE_ATTACK = bool(FEATURES_CONFIG.get("enable_attack", True))
+ENABLE_AUTO_BUFF = bool(FEATURES_CONFIG.get("enable_auto_buff", True))
+ENABLE_WARNING = bool(FEATURES_CONFIG.get("enable_warning", True))
 
 data_lock = threading.Lock()
 shared_info = {"char": None, "hunters": []}
@@ -80,6 +87,11 @@ def warning_worker(win_title):
 # 主运行逻辑
 # ==========================================
 def run():
+    print("🧩 功能开关加载完成:")
+    print(f"   - 自动攻击: {'开启' if ENABLE_ATTACK else '关闭'}")
+    print(f"   - 自动BUFF: {'开启' if ENABLE_AUTO_BUFF else '关闭'}")
+    print(f"   - 自动报警: {'开启' if ENABLE_WARNING else '关闭'}")
+
     try:
         win = gw.getWindowsWithTitle(GAME_WINDOW_TITLE)[0]
         if win.isMinimized: win.restore()
@@ -100,15 +112,24 @@ def run():
     h_t, w_t = tpl_t.shape[:2]
 
     # 3. 启动所有子线程
-    auto_buff.start_buff_threads()  # 自动BUFF
+    if ENABLE_AUTO_BUFF:
+        auto_buff.start_buff_threads()
+    else:
+        print("⏸️ 自动BUFF已在配置中关闭")
 
     # 启动告警监控子线程
-    t_warn = threading.Thread(target=warning_worker, args=(GAME_WINDOW_TITLE,), daemon=True)
-    t_warn.start()
+    if ENABLE_WARNING:
+        t_warn = threading.Thread(target=warning_worker, args=(GAME_WINDOW_TITLE,), daemon=True)
+        t_warn.start()
+    else:
+        print("⏸️ 自动报警已在配置中关闭")
 
     # 启动攻击逻辑子线程
-    t_atk = threading.Thread(target=attack_worker, daemon=True)
-    t_atk.start()
+    if ENABLE_ATTACK:
+        t_atk = threading.Thread(target=attack_worker, daemon=True)
+        t_atk.start()
+    else:
+        print("⏸️ 自动攻击已在配置中关闭")
 
     print("📸 边缘识别模式 + 告警监控 启动完毕！")
 
