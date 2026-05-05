@@ -10,7 +10,15 @@ DEFAULT_CONFIG = {
         "enable_attack": True,
         "enable_auto_buff": True,
         "enable_warning": True,
-    }
+    },
+    "detection": {
+        "hunter_edge_threshold": 0.20,
+        "hunter_gray_threshold": 0.66,
+        "hunter_max_candidates_per_template": 60,
+        "hunter_group_eps": 0.24,
+        "hunter_track_max_miss": 3,
+        "hunter_edge_only": False,
+    },
 }
 
 

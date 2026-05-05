@@ -1,9 +1,41 @@
 {
-  // 功能总开关
+  // 功能总开关（true=开启，false=关闭）
   "features": {
-    "enable_attack": false,
-    "enable_auto_buff": false,
-    "enable_warning": false
+    "enable_attack": true,     // 自动攻击开关
+    "enable_auto_buff": false,  // 自动Buff开关
+    "enable_warning": false     // 告警检测开关
+  },
+
+  // 怪物识别调参
+  "detection": {
+    // 边缘匹配阈值（-1~1）
+    // 越大越严格：误检更少，但可能漏检更多
+    // 越小越宽松：更容易识别到怪，但可能识别到杂物
+    "hunter_edge_threshold": 0.36,
+
+    // 灰度匹配阈值（-1~1，仅在 hunter_edge_only=false 时生效）
+    // 越大越严格：降低误检
+    // 越小越宽松：提高召回但易误检
+    "hunter_gray_threshold": 0.66,
+
+    // 每张模板最多保留的候选点数量（Top-K）
+    // 越大：召回更高，但噪声和CPU开销增加
+    // 越小：更干净更快，但可能漏掉边缘目标
+    "hunter_max_candidates_per_template": 40,
+
+    // 候选框合并松紧度（groupRectangles 的 eps）
+    // 越大：更容易合并相近框（有助降噪，但可能误合并）
+    // 越小：合并更严格（可能保留重复框）
+    "hunter_group_eps": 0.24,
+
+    // 允许连续丢失多少帧仍保留上次怪物结果（防抖）
+    // 越大：画面更稳定，但错误目标残留更久
+    // 越小：响应更快，但可能闪烁/抖动 0~6
+    "hunter_track_max_miss": 3,
+
+    // 是否只使用边缘匹配
+    // true：仅边缘（通常更稳、误检更少）
+    // false：边缘+灰度（召回更高，但更容易误检）
+    "hunter_edge_only": false
   }
 }
-
