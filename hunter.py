@@ -23,7 +23,7 @@ TITLE_IMG = 'char_title.png'
 # 识别配置
 THRESHOLD_HUNTER = 0.45 # 边缘模式门槛  越大匹配度越高
 THRESHOLD_TITLE = 0.60  # 角色识别门槛
-Y_DIFF_LIMIT = 200  # Y轴高度差限制
+Y_DIFF_LIMIT = 120  # Y轴高度差限制
 VIEW_SCALE = 0.5  # 预览缩放
 PREVIEW_RIGHT_MARGIN = 40  # 预览窗距离屏幕右边距
 PREVIEW_BOTTOM_MARGIN = 106  # 预览窗距离屏幕下边距（预留任务栏）
@@ -42,8 +42,75 @@ HUNTER_GROUP_EPS = float(DETECT_CONFIG.get("hunter_group_eps", 0.24))
 HUNTER_TRACK_MAX_MISS = int(DETECT_CONFIG.get("hunter_track_max_miss", 3))
 HUNTER_EDGE_ONLY = bool(DETECT_CONFIG.get("hunter_edge_only", False))
 
+PATROL_CONFIG = APP_CONFIG.get("patrol", {})
+PATROL_ENABLED = bool(PATROL_CONFIG.get("enabled", False))
+PATROL_NO_HUNTER_TIMEOUT_SEC = float(PATROL_CONFIG.get("no_hunter_timeout_sec", 1.2))
+PATROL_MOVE_TOLERANCE_PX = int(PATROL_CONFIG.get("move_tolerance_px", 24))
+PATROL_STEP_COOLDOWN_SEC = float(PATROL_CONFIG.get("step_cooldown_sec", 0.6))
+PATROL_STEPS = PATROL_CONFIG.get("steps", [])
+PATROL_DYNAMIC_ROPE_X = bool(PATROL_CONFIG.get("dynamic_rope_x", True))
+PATROL_ROPE_MATCH_THRESHOLD = float(PATROL_CONFIG.get("rope_match_threshold", 0.32))
+PATROL_ROPE_MAX_CANDIDATES = int(PATROL_CONFIG.get("rope_max_candidates_per_template", 30))
+
+
+def _optional_int(value):
+    if isinstance(value, bool) or value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return int(value)
+    if isinstance(value, str):
+        text = value.strip()
+        if text:
+            try:
+                return int(float(text))
+            except ValueError:
+                return None
+    return None
+
+
+def _normalize_layer_bounds(raw_bounds):
+    normalized = {}
+    if not isinstance(raw_bounds, dict):
+        return normalized
+
+    for layer, bound in raw_bounds.items():
+        if not isinstance(bound, (list, tuple)) or len(bound) != 2:
+            continue
+        y1 = _optional_int(bound[0])
+        y2 = _optional_int(bound[1])
+        if y1 is None or y2 is None:
+            continue
+        if y1 > y2:
+            y1, y2 = y2, y1
+        normalized[str(layer)] = (y1, y2)
+
+    return normalized
+
+
+def _normalize_layer_points(raw_points):
+    normalized = {}
+    if not isinstance(raw_points, dict):
+        return normalized
+
+    for layer, points in raw_points.items():
+        if not isinstance(points, dict):
+            continue
+        item = {}
+        for key in ("left_x", "right_x", "drop_x", "rope_x"):
+            val = _optional_int(points.get(key))
+            if val is not None:
+                item[key] = val
+        if item:
+            normalized[str(layer)] = item
+
+    return normalized
+
+
+LAYER_Y_BOUNDS = _normalize_layer_bounds(PATROL_CONFIG.get("layer_y_bounds", {}))
+LAYER_POINTS = _normalize_layer_points(PATROL_CONFIG.get("layer_points", {}))
+
 data_lock = threading.Lock()
-shared_info = {"char": None, "hunters": []}
+shared_info = {"char": None, "hunters": [], "patrol_cmd": None}
 _last_valid_hunts = []
 _hunter_miss_frames = 0
 
@@ -104,6 +171,83 @@ def _resolve_hunter_files():
     return HUNTER_FILES
 
 
+def _resolve_rope_files():
+    configured = PATROL_CONFIG.get("rope_templates")
+    if isinstance(configured, list):
+        files = [str(x) for x in configured if isinstance(x, str) and x.strip()]
+        if files:
+            return files
+
+    default_patterns = ["hunters/ladder*.png", "hunters/rope*.png"]
+    found = []
+    for pattern in default_patterns:
+        found.extend(sorted(Path().glob(pattern)))
+    return [str(p).replace("\\", "/") for p in found]
+
+
+def _normalize_patrol_steps(raw_steps):
+    normalized = []
+    if not isinstance(raw_steps, list):
+        return normalized
+
+    for step in raw_steps:
+        if not isinstance(step, dict):
+            continue
+        action = str(step.get("action", "")).strip().lower()
+        if action not in ("move", "down_jump", "climb_up", "wait", "scan_left", "scan_right"):
+            continue
+
+        normalized_step = {"action": action}
+        if isinstance(step.get("x"), (int, float)):
+            normalized_step["x"] = int(step["x"])
+        if isinstance(step.get("tol"), (int, float)):
+            normalized_step["tol"] = int(step["tol"])
+        if isinstance(step.get("hold_sec"), (int, float)):
+            normalized_step["hold_sec"] = float(step["hold_sec"])
+        if isinstance(step.get("wait_sec"), (int, float)):
+            normalized_step["wait_sec"] = float(step["wait_sec"])
+
+        normalized.append(normalized_step)
+
+    return normalized
+
+
+def _draw_debug_text(img, text: str, x: int, y: int):
+    # 白描边 + 红字，复杂背景下也清晰。
+    cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (255, 255, 255), 3, cv2.LINE_AA)
+    cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 0, 255), 1, cv2.LINE_AA)
+
+
+def _resolve_current_layer(char_y):
+    if not isinstance(char_y, (int, float)):
+        return None
+    for layer, bounds in LAYER_Y_BOUNDS.items():
+        y1, y2 = bounds
+        if y1 <= char_y <= y2:
+            return layer
+    return None
+
+
+def _detect_rope_xs(frame_edge, rope_templates):
+    rects_raw = []
+    for tpl in rope_templates:
+        res = cv2.matchTemplate(frame_edge, tpl["edge"], cv2.TM_CCOEFF_NORMED)
+        pts = _collect_top_matches(res, PATROL_ROPE_MATCH_THRESHOLD, PATROL_ROPE_MAX_CANDIDATES)
+        for pt in pts:
+            rects_raw.append([int(pt[0]), int(pt[1]), tpl["w"], tpl["h"]])
+            rects_raw.append([int(pt[0]), int(pt[1]), tpl["w"], tpl["h"]])
+
+    if not rects_raw:
+        return []
+
+    rects_final, _ = cv2.groupRectangles(rects_raw, 1, 0.2)
+    if len(rects_final) == 0:
+        return []
+
+    xs = sorted({int(x + w // 2) for (x, y, w, h) in rects_final})
+    return xs
+
+
 # ==========================================
 # 子线程 1：攻击逻辑
 # ==========================================
@@ -113,8 +257,11 @@ def attack_worker():
         with data_lock:
             char_center = shared_info["char"]
             hunts = shared_info["hunters"]
+            patrol_cmd = shared_info.get("patrol_cmd")
         if char_center and hunts:
             attack.auto_action(char_center, hunts)
+        elif char_center and patrol_cmd:
+            attack.auto_action(char_center, [], patrol_command=patrol_cmd)
         time.sleep(0.01)
 
 
@@ -147,9 +294,15 @@ def run():
     print(f"   - 自动BUFF: {'开启' if ENABLE_AUTO_BUFF else '关闭'}")
     print(f"   - 自动报警: {'开启' if ENABLE_WARNING else '关闭'}")
     print(f"   - 怪物识别模式: {'仅边缘' if HUNTER_EDGE_ONLY else '边缘+灰度'}")
+    print(f"   - 巡逻找怪: {'开启' if PATROL_ENABLED else '关闭'}")
 
     hunter_files = _resolve_hunter_files()
+    rope_files = _resolve_rope_files()
+    patrol_steps = _normalize_patrol_steps(PATROL_STEPS)
     print(f"   - 怪物模板数量: {len(hunter_files)}")
+    print(f"   - 绳子模板数量: {len(rope_files)}")
+    if PATROL_ENABLED:
+        print(f"   - 巡逻步骤数: {len(patrol_steps)}")
 
     screen_w, screen_h = pyautogui.size()
 
@@ -172,6 +325,15 @@ def run():
             gray_tpl = cv2.GaussianBlur(gray_tpl, (3, 3), 0)
         edge_tpl = get_edge_map(tpl)
         monster_templates.append({"edge": edge_tpl, "gray": gray_tpl, "w": w, "h": h})
+
+    rope_templates = []
+    for path in rope_files:
+        tpl = cv2.imread(path)
+        if tpl is None:
+            continue
+        h, w = tpl.shape[:2]
+        edge_tpl = get_edge_map(tpl)
+        rope_templates.append({"edge": edge_tpl, "w": w, "h": h})
 
     tpl_t = cv2.imread(TITLE_IMG)
     h_t, w_t = tpl_t.shape[:2]
@@ -198,7 +360,12 @@ def run():
 
     print("📸 边缘识别模式 + 告警监控 启动完毕！")
 
+    last_hunter_seen_ts = time.time()
+    patrol_step_idx = 0
+    patrol_next_ready_ts = 0.0
+
     while True:
+        now_ts = time.time()
         rect = (win.left, win.top, win.width, win.height)
         img = pyautogui.screenshot(region=rect)
         frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
@@ -258,13 +425,82 @@ def run():
                     cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 255, 255), 1)  # 白框：丢人
 
         valid_hunts = _smooth_hunters(valid_hunts)
+        rope_x_candidates = _detect_rope_xs(frame_edge, rope_templates) if rope_templates else []
+        current_layer = _resolve_current_layer(char_center[1]) if char_center else None
+
+        patrol_cmd = None
+        if valid_hunts:
+            last_hunter_seen_ts = now_ts
+        elif PATROL_ENABLED and patrol_steps and char_center:
+            if now_ts - last_hunter_seen_ts >= PATROL_NO_HUNTER_TIMEOUT_SEC:
+                if now_ts >= patrol_next_ready_ts:
+                    step = patrol_steps[patrol_step_idx % len(patrol_steps)]
+                    action = step.get("action")
+
+                    if action == "move":
+                        step_x = step.get("x")
+                        if isinstance(step_x, (int, float)):
+                            tol = int(step.get("tol", PATROL_MOVE_TOLERANCE_PX))
+                            patrol_cmd = {"action": "move", "x": int(step_x), "tol": tol}
+                            if abs(char_center[0] - int(step_x)) <= max(1, tol):
+                                patrol_step_idx += 1
+                                patrol_next_ready_ts = now_ts + PATROL_STEP_COOLDOWN_SEC
+                        else:
+                            patrol_step_idx += 1
+                    elif action == "wait":
+                        wait_sec = float(step.get("wait_sec", PATROL_STEP_COOLDOWN_SEC))
+                        patrol_cmd = {"action": "wait"}
+                        patrol_step_idx += 1
+                        patrol_next_ready_ts = now_ts + max(0.1, wait_sec)
+                    else:
+                        patrol_cmd = dict(step)
+                        if action == "climb_up":
+                            if PATROL_DYNAMIC_ROPE_X and rope_x_candidates:
+                                nearest = min(rope_x_candidates, key=lambda x: abs(x - char_center[0]))
+                                patrol_cmd["x"] = int(nearest)
+                            elif current_layer in LAYER_POINTS and "rope_x" in LAYER_POINTS[current_layer]:
+                                patrol_cmd["x"] = int(LAYER_POINTS[current_layer]["rope_x"])
+                        patrol_step_idx += 1
+                        hold_sec = float(step.get("hold_sec", 0.0))
+                        patrol_next_ready_ts = now_ts + max(PATROL_STEP_COOLDOWN_SEC, hold_sec)
 
         with data_lock:
             shared_info["char"] = char_center
             shared_info["hunters"] = valid_hunts
+            shared_info["patrol_cmd"] = patrol_cmd
+
 
         # 预览
         show = cv2.resize(frame, (0, 0), fx=VIEW_SCALE, fy=VIEW_SCALE)
+
+        if char_center:
+            pos_text = f"CHAR x={char_center[0]} y={char_center[1]}"
+        else:
+            pos_text = "CHAR x=- y=-"
+
+        if patrol_cmd:
+            action = patrol_cmd.get("action", "-")
+            cmd_x = patrol_cmd.get("x")
+            if isinstance(cmd_x, (int, float)):
+                patrol_text = f"PATROL {action} x={int(cmd_x)}"
+            else:
+                patrol_text = f"PATROL {action}"
+        elif PATROL_ENABLED:
+            patrol_text = "PATROL ready"
+        else:
+            patrol_text = "PATROL off"
+
+        layer_text = f"LAYER {current_layer if current_layer else '-'}"
+        if rope_x_candidates:
+            rope_text = f"ROPE n={len(rope_x_candidates)} near={min(rope_x_candidates, key=lambda x: abs(x - char_center[0])) if char_center else rope_x_candidates[0]}"
+        else:
+            rope_text = "ROPE n=0"
+
+        _draw_debug_text(show, pos_text, 12, 26)
+        _draw_debug_text(show, patrol_text, 12, 50)
+        _draw_debug_text(show, layer_text, 12, 74)
+        _draw_debug_text(show, rope_text, 12, 98)
+
         cv2.imshow('System Monitor', show)
         show_h, show_w = show.shape[:2]
         win_x = max(0, screen_w - show_w - PREVIEW_RIGHT_MARGIN)

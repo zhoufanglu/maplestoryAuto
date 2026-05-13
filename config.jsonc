@@ -1,17 +1,17 @@
 {
   // 功能总开关（true=开启，false=关闭）
   "features": {
-    "enable_attack": true,     // 自动攻击开关
+    "enable_attack": false,     // 自动攻击开关
     "enable_auto_buff": false,  // 自动Buff开关
     "enable_warning": false     // 告警检测开关
-  },
+  },  
 
   // 怪物识别调参
   "detection": {
     // 边缘匹配阈值（-1~1）
     // 越大越严格：误检更少，但可能漏检更多
     // 越小越宽松：更容易识别到怪，但可能识别到杂物
-    "hunter_edge_threshold": 0.36,
+    "hunter_edge_threshold": 0.40,
 
     // 灰度匹配阈值（-1~1，仅在 hunter_edge_only=false 时生效）
     // 越大越严格：降低误检
@@ -37,5 +37,49 @@
     // true：仅边缘（通常更稳、误检更少）
     // false：边缘+灰度（召回更高，但更容易误检）
     "hunter_edge_only": false
+  },
+
+  // 屏幕外找怪巡逻（怪物一段时间未识别到时按步骤执行）
+  "patrol": {
+    "enabled": true,
+    "no_hunter_timeout_sec": 0.7,
+    "move_tolerance_px": 24,
+    "step_cooldown_sec": 0.7,
+
+    // 两层的相对Y范围（窗口内坐标）
+    "layer_y_bounds": {
+      "L1": [450, 550],
+      "L2": [710, 760]
+    },
+
+    // 每层点位（窗口内 x）
+    "layer_points": {
+      "L1": {
+        "left_x": 337,
+        "right_x": 836,
+        "drop_x": 674
+      },
+      "L2": {
+        "left_x": 337,
+        "right_x": 836,
+        "rope_x": 565
+      }
+    },
+
+    "steps": [
+      { "action": "move", "x": 337 },
+      { "action": "move", "x": 900 },
+
+      { "action": "move", "x": 674 },
+      { "action": "down_jump" },
+      { "action": "wait", "wait_sec": 0.45 },
+
+      { "action": "move", "x": 900 },
+      { "action": "move", "x": 337 },
+
+      { "action": "move", "x": 565 },
+      { "action": "climb_up", "x": 565, "tol": 24, "hold_sec": 1.0 },
+      { "action": "wait", "wait_sec": 0.45 }
+    ]
   }
 }

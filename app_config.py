@@ -19,6 +19,13 @@ DEFAULT_CONFIG = {
         "hunter_track_max_miss": 3,
         "hunter_edge_only": False,
     },
+    "patrol": {
+        "enabled": False,
+        "no_hunter_timeout_sec": 1.2,
+        "move_tolerance_px": 24,
+        "step_cooldown_sec": 0.6,
+        "steps": [],
+    },
 }
 
 
