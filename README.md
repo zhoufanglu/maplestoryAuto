@@ -14,5 +14,5 @@ python -u capture_hunter_roi.py
 
 # 版本说明
 - v1.0.0 - 目前可以单平台打怪，后续会增加多平台打怪功能
-
+![v1.0 演示](gif/v1.0.gif)
 
