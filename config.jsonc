@@ -1,7 +1,7 @@
 {
   // 功能总开关（true=开启，false=关闭）
   "features": {
-    "enable_attack": true,     // 自动攻击开关
+    "enable_attack": false,     // 自动攻击开关
     "enable_auto_buff": false,  // 自动Buff开关
     "enable_warning": false     // 告警检测开关
   },  
@@ -39,46 +39,47 @@
     "hunter_edge_only": false
   },
 
-  // 屏幕外找怪巡逻（怪物一段时间未识别到时按步骤执行）
-  "patrol": {
+  // 小地图定位玩家点（新的角色定位主逻辑）
+  "minimap": {
+    "player_color": [66, 255, 255],
+    "offset": [0, 0],
+    "player_color_tolerance": 16,
+    "min_player_pixels": 2,
+    "border_tolerance": 45,
+    "use_fallback_when_not_found": true,
+    "fallback_region": [0, 0, 220, 260],
+    "debug_draw_region": true
+  },
+
+  // 导航状态机配置（推荐）
+  "navigation": {
     "enabled": true,
     "no_hunter_timeout_sec": 0.7,
     "move_tolerance_px": 24,
-    "step_cooldown_sec": 0.7,
+    "command_cooldown_sec": 0.7,
 
-    // 两层的相对Y范围（窗口内坐标）
-    "layer_y_bounds": {
-      "L1": [450, 550],
-      "L2": [710, 760]
+    // 全局锚点（可选）
+    "anchors": {
+      "safe_left": 337,
+      "safe_right": 836,
+      "drop_point": 674,
+      "rope_point": 565
     },
 
-    // 每层点位（窗口内 x）
-    "layer_points": {
-      "L1": {
-        "left_x": 337,
-        "right_x": 836,
-        "drop_x": 674
-      },
-      "L2": {
-        "left_x": 337,
-        "right_x": 836,
-        "rope_x": 565
-      }
-    },
-
+    // 动作脚本（已移除按层/绳子逻辑）
     "steps": [
-      { "action": "move", "x": 337 },
-      { "action": "move", "x": 900 },
+      { "action": "scan_right", "hold_sec": 0.6 },
+      { "action": "scan_left", "hold_sec": 0.6 },
 
-      { "action": "move", "x": 674 },
+      { "action": "move", "anchor": "drop_point" },
       { "action": "down_jump" },
       { "action": "wait", "wait_sec": 0.45 },
 
-      { "action": "move", "x": 900 },
-      { "action": "move", "x": 337 },
+      { "action": "scan_right", "hold_sec": 0.6 },
+      { "action": "scan_left", "hold_sec": 0.6 },
 
-      { "action": "move", "x": 565 },
-      { "action": "climb_up", "x": 565, "tol": 24, "hold_sec": 1.0 },
+      { "action": "move", "anchor": "rope_point", "tol": 24 },
+      { "action": "climb_up", "anchor": "rope_point", "tol": 24, "hold_sec": 1.0 },
       { "action": "wait", "wait_sec": 0.45 }
     ]
   }

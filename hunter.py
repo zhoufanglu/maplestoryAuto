@@ -12,17 +12,17 @@ import attack
 import auto_buff
 import warning
 from app_config import load_config
+from navigation import NavContext, NavigationStateMachine
+from minimap_locator import get_minimap_loc_size, get_player_location_on_minimap
 
 # ==========================================
 # 核心设置区
 # ==========================================
 GAME_WINDOW_TITLE = "WingsMS-v0.31"
 HUNTER_FILES = ['hunters/img_1.png', 'hunters/img_2.png']
-TITLE_IMG = 'char_title.png'
 
 # 识别配置
 THRESHOLD_HUNTER = 0.45 # 边缘模式门槛  越大匹配度越高
-THRESHOLD_TITLE = 0.60  # 角色识别门槛
 Y_DIFF_LIMIT = 200  # Y轴高度差限制
 VIEW_SCALE = 0.5  # 预览缩放
 PREVIEW_RIGHT_MARGIN = 40  # 预览窗距离屏幕右边距
@@ -34,6 +34,16 @@ ENABLE_ATTACK = bool(FEATURES_CONFIG.get("enable_attack", True))
 ENABLE_AUTO_BUFF = bool(FEATURES_CONFIG.get("enable_auto_buff", True))
 ENABLE_WARNING = bool(FEATURES_CONFIG.get("enable_warning", True))
 
+MINIMAP_CONFIG = APP_CONFIG.get("minimap", {})
+MINIMAP_PLAYER_COLOR = tuple(MINIMAP_CONFIG.get("player_color", [136, 255, 255]))
+MINIMAP_OFFSET = tuple(MINIMAP_CONFIG.get("offset", [0, 0]))
+MINIMAP_PLAYER_COLOR_TOLERANCE = int(MINIMAP_CONFIG.get("player_color_tolerance", 12))
+MINIMAP_MIN_PLAYER_PIXELS = int(MINIMAP_CONFIG.get("min_player_pixels", 3))
+MINIMAP_BORDER_TOLERANCE = int(MINIMAP_CONFIG.get("border_tolerance", 8))
+MINIMAP_USE_FALLBACK_WHEN_NOT_FOUND = bool(MINIMAP_CONFIG.get("use_fallback_when_not_found", False))
+MINIMAP_FALLBACK_REGION = tuple(MINIMAP_CONFIG.get("fallback_region", [0, 0, 0, 0]))
+MINIMAP_DEBUG_DRAW_REGION = bool(MINIMAP_CONFIG.get("debug_draw_region", True))
+
 DETECT_CONFIG = APP_CONFIG.get("detection", {})
 HUNTER_EDGE_THRESHOLD = float(DETECT_CONFIG.get("hunter_edge_threshold", THRESHOLD_HUNTER))
 HUNTER_GRAY_THRESHOLD = float(DETECT_CONFIG.get("hunter_gray_threshold", 0.66))
@@ -43,14 +53,12 @@ HUNTER_TRACK_MAX_MISS = int(DETECT_CONFIG.get("hunter_track_max_miss", 3))
 HUNTER_EDGE_ONLY = bool(DETECT_CONFIG.get("hunter_edge_only", False))
 
 PATROL_CONFIG = APP_CONFIG.get("patrol", {})
-PATROL_ENABLED = bool(PATROL_CONFIG.get("enabled", False))
-PATROL_NO_HUNTER_TIMEOUT_SEC = float(PATROL_CONFIG.get("no_hunter_timeout_sec", 1.2))
-PATROL_MOVE_TOLERANCE_PX = int(PATROL_CONFIG.get("move_tolerance_px", 24))
-PATROL_STEP_COOLDOWN_SEC = float(PATROL_CONFIG.get("step_cooldown_sec", 0.6))
-PATROL_STEPS = PATROL_CONFIG.get("steps", [])
-PATROL_DYNAMIC_ROPE_X = bool(PATROL_CONFIG.get("dynamic_rope_x", True))
-PATROL_ROPE_MATCH_THRESHOLD = float(PATROL_CONFIG.get("rope_match_threshold", 0.32))
-PATROL_ROPE_MAX_CANDIDATES = int(PATROL_CONFIG.get("rope_max_candidates_per_template", 30))
+NAV_CONFIG = APP_CONFIG.get("navigation", PATROL_CONFIG)
+NAV_ENABLED = bool(NAV_CONFIG.get("enabled", False))
+NAV_NO_HUNTER_TIMEOUT_SEC = float(NAV_CONFIG.get("no_hunter_timeout_sec", 1.2))
+NAV_MOVE_TOLERANCE_PX = int(NAV_CONFIG.get("move_tolerance_px", 24))
+NAV_COMMAND_COOLDOWN_SEC = float(NAV_CONFIG.get("command_cooldown_sec", NAV_CONFIG.get("step_cooldown_sec", 0.6)))
+NAV_STEPS = NAV_CONFIG.get("steps", [])
 
 
 def _optional_int(value):
@@ -68,46 +76,20 @@ def _optional_int(value):
     return None
 
 
-def _normalize_layer_bounds(raw_bounds):
-    normalized = {}
-    if not isinstance(raw_bounds, dict):
-        return normalized
-
-    for layer, bound in raw_bounds.items():
-        if not isinstance(bound, (list, tuple)) or len(bound) != 2:
-            continue
-        y1 = _optional_int(bound[0])
-        y2 = _optional_int(bound[1])
-        if y1 is None or y2 is None:
-            continue
-        if y1 > y2:
-            y1, y2 = y2, y1
-        normalized[str(layer)] = (y1, y2)
-
-    return normalized
-
-
-def _normalize_layer_points(raw_points):
+def _normalize_anchor_points(raw_points):
     normalized = {}
     if not isinstance(raw_points, dict):
         return normalized
 
-    for layer, points in raw_points.items():
-        if not isinstance(points, dict):
+    for key, value in raw_points.items():
+        parsed = _optional_int(value)
+        if parsed is None:
             continue
-        item = {}
-        for key in ("left_x", "right_x", "drop_x", "rope_x"):
-            val = _optional_int(points.get(key))
-            if val is not None:
-                item[key] = val
-        if item:
-            normalized[str(layer)] = item
-
+        normalized[str(key)] = parsed
     return normalized
 
 
-LAYER_Y_BOUNDS = _normalize_layer_bounds(PATROL_CONFIG.get("layer_y_bounds", {}))
-LAYER_POINTS = _normalize_layer_points(PATROL_CONFIG.get("layer_points", {}))
+ANCHOR_POINTS = _normalize_anchor_points(NAV_CONFIG.get("anchors", {}))
 
 data_lock = threading.Lock()
 shared_info = {"char": None, "hunters": [], "patrol_cmd": None}
@@ -171,20 +153,6 @@ def _resolve_hunter_files():
     return HUNTER_FILES
 
 
-def _resolve_rope_files():
-    configured = PATROL_CONFIG.get("rope_templates")
-    if isinstance(configured, list):
-        files = [str(x) for x in configured if isinstance(x, str) and x.strip()]
-        if files:
-            return files
-
-    default_patterns = ["hunters/ladder*.png", "hunters/rope*.png"]
-    found = []
-    for pattern in default_patterns:
-        found.extend(sorted(Path().glob(pattern)))
-    return [str(p).replace("\\", "/") for p in found]
-
-
 def _normalize_patrol_steps(raw_steps):
     normalized = []
     if not isinstance(raw_steps, list):
@@ -198,6 +166,9 @@ def _normalize_patrol_steps(raw_steps):
             continue
 
         normalized_step = {"action": action}
+        anchor = step.get("anchor")
+        if isinstance(anchor, str) and anchor.strip():
+            normalized_step["anchor"] = anchor.strip()
         if isinstance(step.get("x"), (int, float)):
             normalized_step["x"] = int(step["x"])
         if isinstance(step.get("tol"), (int, float)):
@@ -218,34 +189,35 @@ def _draw_debug_text(img, text: str, x: int, y: int):
     cv2.putText(img, text, (x, y), cv2.FONT_HERSHEY_SIMPLEX, 0.58, (0, 0, 255), 1, cv2.LINE_AA)
 
 
-def _resolve_current_layer(char_y):
-    if not isinstance(char_y, (int, float)):
+def _normalize_fallback_region(region, frame_shape):
+    if not isinstance(region, (list, tuple)) or len(region) != 4:
         return None
-    for layer, bounds in LAYER_Y_BOUNDS.items():
-        y1, y2 = bounds
-        if y1 <= char_y <= y2:
-            return layer
-    return None
+
+    try:
+        x, y, w, h = [int(v) for v in region]
+    except (TypeError, ValueError):
+        return None
+
+    if w <= 0 or h <= 0:
+        return None
+
+    fh, fw = frame_shape[:2]
+    x = max(0, min(fw - 1, x))
+    y = max(0, min(fh - 1, y))
+    w = max(1, min(w, fw - x))
+    h = max(1, min(h, fh - y))
+    return x, y, w, h
 
 
-def _detect_rope_xs(frame_edge, rope_templates):
-    rects_raw = []
-    for tpl in rope_templates:
-        res = cv2.matchTemplate(frame_edge, tpl["edge"], cv2.TM_CCOEFF_NORMED)
-        pts = _collect_top_matches(res, PATROL_ROPE_MATCH_THRESHOLD, PATROL_ROPE_MAX_CANDIDATES)
-        for pt in pts:
-            rects_raw.append([int(pt[0]), int(pt[1]), tpl["w"], tpl["h"]])
-            rects_raw.append([int(pt[0]), int(pt[1]), tpl["w"], tpl["h"]])
-
-    if not rects_raw:
-        return []
-
-    rects_final, _ = cv2.groupRectangles(rects_raw, 1, 0.2)
-    if len(rects_final) == 0:
-        return []
-
-    xs = sorted({int(x + w // 2) for (x, y, w, h) in rects_final})
-    return xs
+def _count_player_pixels_on_minimap(img_minimap):
+    if img_minimap is None:
+        return 0
+    base = np.array(MINIMAP_PLAYER_COLOR, dtype=np.int16)
+    tol = max(0, int(MINIMAP_PLAYER_COLOR_TOLERANCE))
+    lower = np.clip(base - tol, 0, 255).astype(np.uint8)
+    upper = np.clip(base + tol, 0, 255).astype(np.uint8)
+    mask = cv2.inRange(img_minimap, lower, upper)
+    return int(cv2.countNonZero(mask))
 
 
 # ==========================================
@@ -294,15 +266,16 @@ def run():
     print(f"   - 自动BUFF: {'开启' if ENABLE_AUTO_BUFF else '关闭'}")
     print(f"   - 自动报警: {'开启' if ENABLE_WARNING else '关闭'}")
     print(f"   - 怪物识别模式: {'仅边缘' if HUNTER_EDGE_ONLY else '边缘+灰度'}")
-    print(f"   - 巡逻找怪: {'开启' if PATROL_ENABLED else '关闭'}")
+    print(f"   - 导航状态机: {'开启' if NAV_ENABLED else '关闭'}")
+    print("   - 小地图定位: 开启")
+    if MINIMAP_USE_FALLBACK_WHEN_NOT_FOUND:
+        print(f"   - 小地图兜底区域: {MINIMAP_FALLBACK_REGION}")
 
     hunter_files = _resolve_hunter_files()
-    rope_files = _resolve_rope_files()
-    patrol_steps = _normalize_patrol_steps(PATROL_STEPS)
+    patrol_steps = _normalize_patrol_steps(NAV_STEPS)
     print(f"   - 怪物模板数量: {len(hunter_files)}")
-    print(f"   - 绳子模板数量: {len(rope_files)}")
-    if PATROL_ENABLED:
-        print(f"   - 巡逻步骤数: {len(patrol_steps)}")
+    if NAV_ENABLED:
+        print(f"   - 导航步骤数: {len(patrol_steps)}")
 
     screen_w, screen_h = pyautogui.size()
 
@@ -326,18 +299,6 @@ def run():
         edge_tpl = get_edge_map(tpl)
         monster_templates.append({"edge": edge_tpl, "gray": gray_tpl, "w": w, "h": h})
 
-    rope_templates = []
-    for path in rope_files:
-        tpl = cv2.imread(path)
-        if tpl is None:
-            continue
-        h, w = tpl.shape[:2]
-        edge_tpl = get_edge_map(tpl)
-        rope_templates.append({"edge": edge_tpl, "w": w, "h": h})
-
-    tpl_t = cv2.imread(TITLE_IMG)
-    h_t, w_t = tpl_t.shape[:2]
-
     # 3. 启动所有子线程
     if ENABLE_AUTO_BUFF:
         auto_buff.start_buff_threads()
@@ -360,9 +321,12 @@ def run():
 
     print("📸 边缘识别模式 + 告警监控 启动完毕！")
 
-    last_hunter_seen_ts = time.time()
-    patrol_step_idx = 0
-    patrol_next_ready_ts = 0.0
+    navigator = NavigationStateMachine(
+        steps=patrol_steps,
+        no_hunter_timeout_sec=NAV_NO_HUNTER_TIMEOUT_SEC,
+        command_cooldown_sec=NAV_COMMAND_COOLDOWN_SEC,
+        move_tolerance_px=NAV_MOVE_TOLERANCE_PX,
+    )
 
     while True:
         now_ts = time.time()
@@ -377,13 +341,43 @@ def run():
             frame_gray = cv2.GaussianBlur(frame_gray, (3, 3), 0)
         frame_edge = get_edge_map(frame)
 
-        # 2. 识别角色
-        res_t = cv2.matchTemplate(frame, tpl_t, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res_t)
-        char_center = None
-        if max_val >= THRESHOLD_TITLE:
-            char_center = (max_loc[0] + w_t // 2, max_loc[1] + h_t // 2)
-            cv2.rectangle(frame, max_loc, (max_loc[0] + w_t, max_loc[1] + h_t), (255, 0, 0), 2)
+        # 1.5 角色定位：优先小地图，其次标题模板兜底
+        minimap_result = get_minimap_loc_size(frame, border_tolerance=MINIMAP_BORDER_TOLERANCE)
+        minimap_source = "auto"
+        if minimap_result is None and MINIMAP_USE_FALLBACK_WHEN_NOT_FOUND:
+            fallback = _normalize_fallback_region(MINIMAP_FALLBACK_REGION, frame.shape)
+            if fallback is not None:
+                minimap_result = fallback
+                minimap_source = "fallback"
+        elif minimap_result is None:
+            minimap_source = "none"
+
+        loc_minimap = None
+        minimap_found = minimap_result is not None
+        player_pixel_count = 0
+        if minimap_result is not None:
+            mx, my, mw, mh = minimap_result
+            img_minimap = frame[my:my + mh, mx:mx + mw]
+            player_pixel_count = _count_player_pixels_on_minimap(img_minimap)
+            loc_player_on_minimap = get_player_location_on_minimap(
+                img_minimap,
+                MINIMAP_PLAYER_COLOR,
+                color_tolerance=MINIMAP_PLAYER_COLOR_TOLERANCE,
+                min_pixels=MINIMAP_MIN_PLAYER_PIXELS,
+            )
+            if MINIMAP_DEBUG_DRAW_REGION:
+                color = (0, 255, 255) if minimap_source == "auto" else (255, 200, 0)
+                cv2.rectangle(frame, (mx, my), (mx + mw, my + mh), color, 1)
+            if loc_player_on_minimap is not None:
+                loc_minimap = (
+                    mx + loc_player_on_minimap[0] + int(MINIMAP_OFFSET[0]),
+                    my + loc_player_on_minimap[1] + int(MINIMAP_OFFSET[1]),
+                )
+                cv2.circle(frame, loc_minimap, radius=3, color=(0, 255, 0), thickness=-1)
+
+        # 2. 角色定位：仅使用 minimap 玩家点
+        char_center = loc_minimap
+        nav_char_pos = loc_minimap
 
         # 3. 识别怪物
         rects_raw = []
@@ -425,44 +419,17 @@ def run():
                     cv2.rectangle(frame, (x, y), (x + w, y + h), (255, 255, 255), 1)  # 白框：丢人
 
         valid_hunts = _smooth_hunters(valid_hunts)
-        rope_x_candidates = _detect_rope_xs(frame_edge, rope_templates) if rope_templates else []
-        current_layer = _resolve_current_layer(char_center[1]) if char_center else None
 
         patrol_cmd = None
-        if valid_hunts:
-            last_hunter_seen_ts = now_ts
-        elif PATROL_ENABLED and patrol_steps and char_center:
-            if now_ts - last_hunter_seen_ts >= PATROL_NO_HUNTER_TIMEOUT_SEC:
-                if now_ts >= patrol_next_ready_ts:
-                    step = patrol_steps[patrol_step_idx % len(patrol_steps)]
-                    action = step.get("action")
-
-                    if action == "move":
-                        step_x = step.get("x")
-                        if isinstance(step_x, (int, float)):
-                            tol = int(step.get("tol", PATROL_MOVE_TOLERANCE_PX))
-                            patrol_cmd = {"action": "move", "x": int(step_x), "tol": tol}
-                            if abs(char_center[0] - int(step_x)) <= max(1, tol):
-                                patrol_step_idx += 1
-                                patrol_next_ready_ts = now_ts + PATROL_STEP_COOLDOWN_SEC
-                        else:
-                            patrol_step_idx += 1
-                    elif action == "wait":
-                        wait_sec = float(step.get("wait_sec", PATROL_STEP_COOLDOWN_SEC))
-                        patrol_cmd = {"action": "wait"}
-                        patrol_step_idx += 1
-                        patrol_next_ready_ts = now_ts + max(0.1, wait_sec)
-                    else:
-                        patrol_cmd = dict(step)
-                        if action == "climb_up":
-                            if PATROL_DYNAMIC_ROPE_X and rope_x_candidates:
-                                nearest = min(rope_x_candidates, key=lambda x: abs(x - char_center[0]))
-                                patrol_cmd["x"] = int(nearest)
-                            elif current_layer in LAYER_POINTS and "rope_x" in LAYER_POINTS[current_layer]:
-                                patrol_cmd["x"] = int(LAYER_POINTS[current_layer]["rope_x"])
-                        patrol_step_idx += 1
-                        hold_sec = float(step.get("hold_sec", 0.0))
-                        patrol_next_ready_ts = now_ts + max(PATROL_STEP_COOLDOWN_SEC, hold_sec)
+        if NAV_ENABLED and nav_char_pos:
+            navigator.sync_clock(now_ts)
+            nav_ctx = NavContext(
+                now_ts=now_ts,
+                char_pos=nav_char_pos,
+                hunters_pos=valid_hunts,
+                anchor_points=ANCHOR_POINTS,
+            )
+            patrol_cmd = navigator.next_command(nav_ctx)
 
         with data_lock:
             shared_info["char"] = char_center
@@ -474,9 +441,9 @@ def run():
         show = cv2.resize(frame, (0, 0), fx=VIEW_SCALE, fy=VIEW_SCALE)
 
         if char_center:
-            pos_text = f"CHAR x={char_center[0]} y={char_center[1]}"
+            pos_text = f"CHAR(minimap) x={char_center[0]} y={char_center[1]}"
         else:
-            pos_text = "CHAR x=- y=-"
+            pos_text = "CHAR(minimap) x=- y=-"
 
         if patrol_cmd:
             action = patrol_cmd.get("action", "-")
@@ -485,21 +452,17 @@ def run():
                 patrol_text = f"PATROL {action} x={int(cmd_x)}"
             else:
                 patrol_text = f"PATROL {action}"
-        elif PATROL_ENABLED:
+        elif NAV_ENABLED:
             patrol_text = "PATROL ready"
         else:
             patrol_text = "PATROL off"
 
-        layer_text = f"LAYER {current_layer if current_layer else '-'}"
-        if rope_x_candidates:
-            rope_text = f"ROPE n={len(rope_x_candidates)} near={min(rope_x_candidates, key=lambda x: abs(x - char_center[0])) if char_center else rope_x_candidates[0]}"
-        else:
-            rope_text = "ROPE n=0"
-
         _draw_debug_text(show, pos_text, 12, 26)
         _draw_debug_text(show, patrol_text, 12, 50)
-        _draw_debug_text(show, layer_text, 12, 74)
-        _draw_debug_text(show, rope_text, 12, 98)
+        _draw_debug_text(show, f"MINIMAP found={'yes' if minimap_found else 'no'} src={minimap_source}", 12, 74)
+        _draw_debug_text(show, f"PLAYER_DOT pixels={player_pixel_count}", 12, 98)
+        if NAV_ENABLED:
+            _draw_debug_text(show, f"NAV {navigator.state.value}", 12, 122)
 
         cv2.imshow('System Monitor', show)
         show_h, show_w = show.shape[:2]

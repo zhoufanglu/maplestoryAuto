@@ -26,6 +26,30 @@ DEFAULT_CONFIG = {
         "step_cooldown_sec": 0.6,
         "steps": [],
     },
+    "navigation": {
+        "enabled": False,
+        "no_hunter_timeout_sec": 1.2,
+        "move_tolerance_px": 24,
+        "command_cooldown_sec": 0.6,
+        "dynamic_rope_x": True,
+        "rope_match_threshold": 0.32,
+        "rope_max_candidates_per_template": 30,
+        "rope_templates": [],
+        "layer_y_bounds": {},
+        "layer_points": {},
+        "anchors": {},
+        "steps": [],
+    },
+    "minimap": {
+        "player_color": [67, 255, 255],
+        "offset": [0, 0],
+        "player_color_tolerance": 12,
+        "min_player_pixels": 3,
+        "border_tolerance": 8,
+        "use_fallback_when_not_found": False,
+        "fallback_region": [0, 0, 0, 0],
+        "debug_draw_region": True,
+    },
 }
 
 
@@ -91,7 +115,30 @@ def load_config() -> dict[str, Any]:
             parsed = json.loads(_strip_json_comments(raw_text))
             if not isinstance(parsed, dict):
                 raise ValueError("配置文件顶层必须是对象")
-            return _merge_dict(DEFAULT_CONFIG, parsed)
+            merged = _merge_dict(DEFAULT_CONFIG, parsed)
+
+            # Backward compatibility: map legacy patrol config to new navigation config
+            # when navigation is not explicitly configured.
+            nav_cfg = merged.get("navigation") if isinstance(merged.get("navigation"), dict) else {}
+            patrol_cfg = merged.get("patrol") if isinstance(merged.get("patrol"), dict) else {}
+            nav_steps = nav_cfg.get("steps") if isinstance(nav_cfg, dict) else []
+            if (not nav_steps) and patrol_cfg:
+                nav_cfg = _merge_dict(nav_cfg, {
+                    "enabled": patrol_cfg.get("enabled", nav_cfg.get("enabled", False)),
+                    "no_hunter_timeout_sec": patrol_cfg.get("no_hunter_timeout_sec", nav_cfg.get("no_hunter_timeout_sec", 1.2)),
+                    "move_tolerance_px": patrol_cfg.get("move_tolerance_px", nav_cfg.get("move_tolerance_px", 24)),
+                    "command_cooldown_sec": patrol_cfg.get("step_cooldown_sec", nav_cfg.get("command_cooldown_sec", 0.6)),
+                    "dynamic_rope_x": patrol_cfg.get("dynamic_rope_x", nav_cfg.get("dynamic_rope_x", True)),
+                    "rope_match_threshold": patrol_cfg.get("rope_match_threshold", nav_cfg.get("rope_match_threshold", 0.32)),
+                    "rope_max_candidates_per_template": patrol_cfg.get("rope_max_candidates_per_template", nav_cfg.get("rope_max_candidates_per_template", 30)),
+                    "rope_templates": patrol_cfg.get("rope_templates", nav_cfg.get("rope_templates", [])),
+                    "layer_y_bounds": patrol_cfg.get("layer_y_bounds", nav_cfg.get("layer_y_bounds", {})),
+                    "layer_points": patrol_cfg.get("layer_points", nav_cfg.get("layer_points", {})),
+                    "steps": patrol_cfg.get("steps", nav_cfg.get("steps", [])),
+                })
+                merged["navigation"] = nav_cfg
+
+            return merged
         except Exception as exc:
             print(f"⚠️ 配置文件读取失败，已回退默认配置: {path.name} -> {exc}")
             break
