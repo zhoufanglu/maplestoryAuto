@@ -23,7 +23,7 @@ TITLE_IMG = 'char_title.png'
 # 识别配置
 THRESHOLD_HUNTER = 0.45 # 边缘模式门槛  越大匹配度越高
 THRESHOLD_TITLE = 0.60  # 角色识别门槛
-Y_DIFF_LIMIT = 120  # Y轴高度差限制
+Y_DIFF_LIMIT = 200  # Y轴高度差限制
 VIEW_SCALE = 0.5  # 预览缩放
 PREVIEW_RIGHT_MARGIN = 40  # 预览窗距离屏幕右边距
 PREVIEW_BOTTOM_MARGIN = 106  # 预览窗距离屏幕下边距（预留任务栏）

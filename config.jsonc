@@ -1,7 +1,7 @@
 {
   // 功能总开关（true=开启，false=关闭）
   "features": {
-    "enable_attack": false,     // 自动攻击开关
+    "enable_attack": true,     // 自动攻击开关
     "enable_auto_buff": false,  // 自动Buff开关
     "enable_warning": false     // 告警检测开关
   },  
